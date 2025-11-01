@@ -34,7 +34,7 @@ pipeline {
         echo "Checking connectivity to ${env.TARGET}"
 
         // use ssh-agent plugin to provide private key to ssh
-        sshagent(credentials: ['your-ssh-cred-id']) {
+        sshagent(credentials: ['server-ssh']) {
           // now that known_hosts is populated, normal host-key checking will succeed
           sh "ssh -o BatchMode=yes -o ConnectTimeout=5 ${env.TARGET_USER}@${env.TARGET} 'hostname || true'"
         }
