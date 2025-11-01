@@ -3,8 +3,8 @@ pipeline {
 
   environment {
     // hostname or ip of the server to reboot (keep this in credentials/config as appropriate)
-    TARGET = "13.127.199.251"
-    TARGET_USER = "ubuntu"
+    TARGET = "3.110.47.25"
+    TARGET_USER = "ec2-user"
   }
 
   stages {
