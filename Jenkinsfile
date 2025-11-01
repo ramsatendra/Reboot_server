@@ -15,13 +15,28 @@ pipeline {
       }
     }
 
+    // <-- Prep known_hosts stage inserted here
+    stage('Prep known_hosts') {
+      steps {
+        sh '''
+          mkdir -p "$HOME/.ssh"
+          # add host key (safe) for the build user
+          ssh-keyscan -H ${TARGET} >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+          chmod 600 "$HOME/.ssh/known_hosts" || true
+          echo "Known hosts for build:"
+          sed -n '1,2p' "$HOME/.ssh/known_hosts" || true
+        '''
+      }
+    }
+
     stage('Pre-checks') {
       steps {
         echo "Checking connectivity to ${env.TARGET}"
 
-        // your integrated snippet (no nested `steps`)
+        // use ssh-agent plugin to provide private key to ssh
         sshagent(credentials: ['your-ssh-cred-id']) {
-          sh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${env.TARGET_USER}@${env.TARGET} 'hostname || true'"
+          // now that known_hosts is populated, normal host-key checking will succeed
+          sh "ssh -o BatchMode=yes -o ConnectTimeout=5 ${env.TARGET_USER}@${env.TARGET} 'hostname || true'"
         }
 
         // optional: a short extra check using the same credential id (uncomment if desired)
@@ -39,10 +54,10 @@ pipeline {
 
     stage('Reboot server (via SSH agent)') {
       steps {
-        // uses the ssh-agent plugin with credentials id 'server-ssh'
+        // uses the ssh-agent plugin with credentials id in SSH_CRED_ID
         sshagent (credentials: [env.SSH_CRED_ID]) {
           sh """
-            ssh -o StrictHostKeyChecking=no ${env.TARGET_USER}@${env.TARGET} '
+            ssh -o BatchMode=yes -o ConnectTimeout=10 ${env.TARGET_USER}@${env.TARGET} '
               echo "Running pre-reboot checks..."
               uptime
               who -q
