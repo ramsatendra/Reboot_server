@@ -4,8 +4,8 @@ pipeline {
   environment {
     TARGET = "3.110.47.25"
     TARGET_USER = "ec2-user"
-    // change this to the credential id you have in Jenkins (or leave as 'server-ssh' if that's what you use)
-    SSH_CRED_ID = "server-ssh"
+    // Set this to your Jenkins credential id (SSH Username with private key)
+    CRED_ID = "server-ssh"
   }
 
   stages {
@@ -15,16 +15,15 @@ pipeline {
       }
     }
 
-    // <-- Prep known_hosts stage inserted here
     stage('Prep known_hosts') {
       steps {
+        // create per-build known_hosts so SSH won't prompt
         sh '''
           mkdir -p "$HOME/.ssh"
-          # add host key (safe) for the build user
           ssh-keyscan -H ${TARGET} >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
           chmod 600 "$HOME/.ssh/known_hosts" || true
-          echo "Known hosts for build:"
-          sed -n '1,2p' "$HOME/.ssh/known_hosts" || true
+          echo "Known hosts entries (first 5 lines):"
+          sed -n '1,5p' "$HOME/.ssh/known_hosts" || true
         '''
       }
     }
@@ -33,16 +32,26 @@ pipeline {
       steps {
         echo "Checking connectivity to ${env.TARGET}"
 
-        // use ssh-agent plugin to provide private key to ssh
-        sshagent(credentials: ['server-ssh']) {
-          // now that known_hosts is populated, normal host-key checking will succeed
-          sh "ssh -o BatchMode=yes -o ConnectTimeout=5 ${env.TARGET_USER}@${env.TARGET} 'hostname || true'"
-        }
+        // withCredentials writes the private key to a temp file accessible via $KEYFILE
+        withCredentials([sshUserPrivateKey(credentialsId: "${CRED_ID}",
+                                           keyFileVariable: 'KEYFILE',
+                                           usernameVariable: 'SSHUSER')]) {
+          sh '''
+            set -o pipefail
+            chmod 600 "$KEYFILE" || true
 
-        // optional: a short extra check using the same credential id (uncomment if desired)
-        // sshagent(credentials: [env.SSH_CRED_ID]) {
-        //   sh "ssh -o BatchMode=yes -o ConnectTimeout=5 ${env.TARGET_USER}@${env.TARGET} 'echo pre-check ok || true'"
-        // }
+            # show the temp key path for debugging (optional)
+            echo "Using keyfile: $KEYFILE"
+            ls -l "$KEYFILE" || true
+
+            # ensure known_hosts populated (Prep stage should have done it)
+            mkdir -p "$HOME/.ssh"
+            ssh-keyscan -H ${TARGET} >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+
+            # run an SSH connectivity test using the temp key file
+            ssh -o BatchMode=yes -o ConnectTimeout=8 -i "$KEYFILE" ${TARGET_USER}@${TARGET} 'hostname || true'
+          '''
+        }
       }
     }
 
@@ -52,18 +61,23 @@ pipeline {
       }
     }
 
-    stage('Reboot server (via SSH agent)') {
+    stage('Reboot server (via credentials)') {
       steps {
-        // uses the ssh-agent plugin with credentials id in SSH_CRED_ID
-        sshagent (credentials: [env.SSH_CRED_ID]) {
-          sh """
-            ssh -o BatchMode=yes -o ConnectTimeout=10 ${env.TARGET_USER}@${env.TARGET} '
+        withCredentials([sshUserPrivateKey(credentialsId: "${CRED_ID}",
+                                           keyFileVariable: 'KEYFILE',
+                                           usernameVariable: 'SSHUSER')]) {
+          sh '''
+            chmod 600 "$KEYFILE" || true
+
+            # Reboot - using BatchMode so the ssh command fails non-interactively if auth fails
+            ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$KEYFILE" ${TARGET_USER}@${TARGET} <<'EOSSH'
               echo "Running pre-reboot checks..."
               uptime
               who -q
+              # sudo may need NOPASSWD; uncomment the actual reboot once you are ready
               sudo /sbin/shutdown -r +0 "Reboot triggered by Jenkins job ${BUILD_NUMBER}"
-            '
-          """
+EOSSH
+          '''
         }
       }
     }
@@ -72,6 +86,15 @@ pipeline {
       steps {
         echo "Reboot command issued. Wait for it to come back and continue if needed."
       }
+    }
+  }
+
+  post {
+    failure {
+      echo "Pipeline failed — check console output for SSH diagnostics."
+    }
+    success {
+      echo "Pipeline completed successfully (reboot command issued)."
     }
   }
 }
