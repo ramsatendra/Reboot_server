@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     // hostname or ip of the server to reboot (keep this in credentials/config as appropriate)
-    TARGET = "10.0.1.23"
+    TARGET = "13.127.199.251"
     TARGET_USER = "ubuntu"
   }
 
